@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-fullscreen">
+<title>画像ビュアー</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: #000;
+  width: 100vw; height: 100vh;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  color: #fff;
+  /* 画像の長押し選択を防ぐ */
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+}
+
+/* ============================================================
+   ビュアー
+============================================================ */
+#viewer {
+  position: relative;
+  width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+}
+
+.img-slot {
+  position: absolute;
+  width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  transition: opacity 0.25s ease;
+}
+.img-slot img {
+  width: 100%; height: 100%;
+  object-fit: contain; display: block;
+  /* 画像自体の長押し選択・コンテキストメニューを防ぐ */
+  -webkit-user-drag: none;
+  pointer-events: none;
+}
+#slot-current { opacity: 1; z-index: 2; }
+#slot-next    { opacity: 0; z-index: 1; }
+
+/* ============================================================
+   常時表示のメニューボタン（右上）
+============================================================ */
+#menu-toggle {
+  position: fixed;
+  top: 16px; right: 16px;
+  z-index: 20;
+  width: 44px; height: 44px;
+  border-radius: 12px;
+  background: rgba(0,0,0,0.35);
+  border: 1px solid rgba(255,255,255,0.2);
+  backdrop-filter: blur(8px);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px;
+  cursor: pointer;
+  transition: opacity 0.3s, background 0.15s;
+  /* 常に薄く表示、ホバー/タップで濃く */
+  opacity: 0.45;
+}
+#menu-toggle:hover,
+#menu-toggle:active { opacity: 1; background: rgba(0,0,0,0.65); }
+#menu-toggle.menu-open { opacity: 1; }
+
+/* ============================================================
+   上部UIバー
+============================================================ */
+#ui {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 10;
+  background: linear-gradient(to bottom, rgba(0,0,0,.7) 0%, transparent 100%);
+  padding: 14px 68px 28px 16px; /* 右側にmenu-toggleの幅分余白 */
+  display: flex; align-items: center; gap: 10px;
+  opacity: 0; transition: opacity .3s ease;
+  pointer-events: none;
+}
+#ui.visible { opacity: 1; pointer-events: all; }
+
+.btn {
+  background: rgba(255,255,255,.15);
+  border: 1px solid rgba(255,255,255,.3);
+  border-radius: 10px;
+  color: #fff; font-size: 14px;
+  padding: 8px 13px;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  white-space: nowrap;
+  transition: background .15s;
+}
+.btn:active  { background: rgba(255,255,255,.3); }
+.btn.active  { background: rgba(99,179,237,.5); border-color: #63b3ed; }
+
+#interval-wrap { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+#interval-input {
+  width: 54px; padding: 7px 4px;
+  border-radius: 8px; border: 1px solid rgba(255,255,255,.3);
+  background: rgba(255,255,255,.15); color: #fff;
+  font-size: 14px; text-align: center;
+  backdrop-filter: blur(8px);
+}
+#counter { margin-left: auto; font-size: 13px; opacity: .75; white-space: nowrap; }
+
+/* ============================================================
+   ローディング
+============================================================ */
+#loading {
+  position: fixed; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  background: #000; z-index: 200;
+  gap: 16px; font-size: 15px;
+}
+.spinner {
+  width: 40px; height: 40px;
+  border: 3px solid rgba(255,255,255,.2);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ============================================================
+   トースト
+============================================================ */
+#toast {
+  position: fixed; bottom: 40px; left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,.75); border-radius: 20px;
+  padding: 10px 20px; font-size: 14px;
+  z-index: 50; opacity: 0; transition: opacity .3s;
+  pointer-events: none; white-space: nowrap;
+}
+
+/* ============================================================
+   フォルダ設定モーダル
+============================================================ */
+#modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.75);
+  z-index: 100;
+  display: none; align-items: center; justify-content: center;
+  padding: 20px;
+}
+#modal-overlay.open { display: flex; }
+
+#modal {
+  background: #1c1c1e;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 18px;
+  width: min(680px, 100%);
+  max-height: 85vh;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+
+#modal-header {
+  display: flex; align-items: center;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid rgba(255,255,255,.1);
+  gap: 10px;
+}
+#modal-header h2 { font-size: 17px; flex: 1; }
+#btn-modal-apply {
+  background: #0a84ff; border: none;
+  border-radius: 10px; color: #fff;
+  font-size: 14px; padding: 8px 18px; cursor: pointer;
+}
+#btn-modal-apply:active { opacity: .75; }
+#btn-modal-close {
+  background: rgba(255,255,255,.1); border: none;
+  border-radius: 10px; color: #fff;
+  font-size: 14px; padding: 8px 14px; cursor: pointer;
+}
+
+#modal-body {
+  display: flex; flex: 1; overflow: hidden;
+}
+
+/* 左ペイン：フォルダブラウザ */
+#pane-browser {
+  flex: 1; overflow-y: auto; padding: 8px 4px 12px 12px;
+  border-right: 1px solid rgba(255,255,255,.1);
+}
+
+/* ショートカットセクション */
+.browser-section-title {
+  font-size: 11px; color: rgba(255,255,255,.4);
+  text-transform: uppercase; letter-spacing: .06em;
+  padding: 10px 6px 4px;
+}
+.shortcut-row {
+  display: flex; align-items: center;
+  padding: 7px 8px; border-radius: 8px;
+  cursor: pointer; gap: 8px;
+  transition: background .12s;
+}
+.shortcut-row:hover  { background: rgba(255,255,255,.08); }
+.shortcut-row.checked { background: rgba(10,132,255,.2); }
+.shortcut-check {
+  width: 18px; height: 18px; flex-shrink: 0;
+  border: 1.5px solid rgba(255,255,255,.3); border-radius: 5px;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .12s, border-color .12s;
+}
+.shortcut-check.checked { background: #0a84ff; border-color: #0a84ff; }
+.shortcut-check.checked::after { content: "✓"; font-size: 12px; color: #fff; }
+.shortcut-label { font-size: 14px; flex: 1; }
+.shortcut-path  { font-size: 11px; color: rgba(255,255,255,.4); word-break: break-all; }
+
+.divider {
+  height: 1px; background: rgba(255,255,255,.08);
+  margin: 8px 6px;
+}
+
+/* 右ペイン：選択済み */
+#pane-selected {
+  width: 220px; overflow-y: auto;
+  padding: 12px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+#pane-selected-title {
+  font-size: 12px; color: rgba(255,255,255,.5);
+  text-transform: uppercase; letter-spacing: .05em;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+  flex-shrink: 0;
+}
+#selected-list { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+.selected-item {
+  display: flex; align-items: flex-start; gap: 6px;
+  background: rgba(255,255,255,.06);
+  border-radius: 8px; padding: 8px 8px 8px 10px;
+  font-size: 12px; line-height: 1.4;
+}
+.selected-item-path { flex: 1; word-break: break-all; color: rgba(255,255,255,.85); }
+.selected-item-del {
+  background: none; border: none; color: rgba(255,100,100,.8);
+  cursor: pointer; font-size: 16px; line-height: 1;
+  padding: 0 2px; flex-shrink: 0;
+}
+
+/* ツリー */
+.tree-node { user-select: none; -webkit-user-select: none; }
+.tree-row {
+  display: flex; align-items: center;
+  padding: 5px 6px; border-radius: 8px;
+  cursor: pointer; gap: 6px;
+  transition: background .12s;
+}
+.tree-row:hover   { background: rgba(255,255,255,.08); }
+.tree-row.checked { background: rgba(10,132,255,.2); }
+
+.tree-toggle {
+  width: 18px; height: 18px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; color: rgba(255,255,255,.5);
+  flex-shrink: 0; border-radius: 4px;
+  transition: transform .15s;
+}
+.tree-toggle.open { transform: rotate(90deg); }
+.tree-toggle.leaf { visibility: hidden; }
+
+.tree-check {
+  width: 18px; height: 18px; flex-shrink: 0;
+  border: 1.5px solid rgba(255,255,255,.3); border-radius: 5px;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .12s, border-color .12s;
+}
+.tree-check.checked { background: #0a84ff; border-color: #0a84ff; }
+.tree-check.checked::after { content: "✓"; font-size: 12px; color: #fff; }
+
+.tree-icon { font-size: 15px; flex-shrink: 0; }
+.tree-name { font-size: 14px; color: rgba(255,255,255,.9); flex: 1; word-break: break-all; }
+
+.tree-children { margin-left: 24px; display: none; }
+.tree-children.open { display: block; }
+.tree-loading {
+  padding: 6px 6px 6px 48px;
+  font-size: 12px; color: rgba(255,255,255,.4);
+}
+</style>
+</head>
+<body>
+
+<!-- ローディング -->
+<div id="loading">
+  <div class="spinner"></div>
+  <div id="loading-text">画像リストを読み込み中...</div>
+</div>
+
+<!-- 常時表示メニューボタン -->
+<div id="menu-toggle" onclick="toggleUI()">☰</div>
+
+<!-- UIバー -->
+<div id="ui">
+  <button class="btn" onclick="nextImage()">次へ ▶</button>
+
+  <div id="interval-wrap">
+    <button class="btn" id="btn-slide" onclick="toggleSlideshow()">▶ 自動</button>
+    <input id="interval-input" type="number" value="1.3" min="0.3" max="60" step="0.1">
+    <span>秒</span>
+  </div>
+
+  <button class="btn" onclick="openModal()">📁 フォルダ</button>
+  <button class="btn" onclick="doRescan()">↺ 再読込</button>
+  <div id="counter">-</div>
+</div>
+
+<!-- ビュアー -->
+<div id="viewer">
+  <div class="img-slot" id="slot-current"><img id="img-current" src="" alt=""></div>
+  <div class="img-slot" id="slot-next"   ><img id="img-next"    src="" alt=""></div>
+</div>
+
+<!-- トースト -->
+<div id="toast"></div>
+
+<!-- フォルダ設定モーダル -->
+<div id="modal-overlay">
+  <div id="modal">
+    <div id="modal-header">
+      <h2>📁 フォルダ設定</h2>
+      <button id="btn-modal-apply" onclick="applyFolders()">適用 &amp; 再読込</button>
+      <button id="btn-modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div id="modal-body">
+      <div id="pane-browser"></div>
+      <div id="pane-selected">
+        <div id="pane-selected-title">選択中のフォルダ</div>
+        <div id="selected-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+//  ビュアー状態
+// ============================================================
+let indices      = [];
+let cursor       = 0;
+let slideTimer   = null;
+let uiTimer      = null;
+let isTransiting = false;
+let uiVisible    = false;
+
+const imgCurrent  = document.getElementById("img-current");
+const imgNext     = document.getElementById("img-next");
+const slotCurrent = document.getElementById("slot-current");
+const slotNext    = document.getElementById("slot-next");
+const counter     = document.getElementById("counter");
+const btnSlide    = document.getElementById("btn-slide");
+const ui          = document.getElementById("ui");
+const menuToggle  = document.getElementById("menu-toggle");
+
+// ============================================================
+//  初期化
+// ============================================================
+async function init() {
+  try {
+    const res  = await fetch("/api/images");
+    const data = await res.json();
+    document.getElementById("loading").style.display = "none";
+    if (data.count === 0) {
+      toast("フォルダを設定してください（☰ → 📁 フォルダ）", 5000);
+      return;
+    }
+    indices = shuffle(Array.from({length: data.count}, (_, i) => i));
+    showImage(indices[cursor]);
+    preloadNext();
+    updateCounter();
+  } catch (e) {
+    document.getElementById("loading-text").textContent =
+      "サーバーに接続できません。server.py が起動しているか確認してください。";
+  }
+}
+
+// ============================================================
+//  シャッフル
+// ============================================================
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// ============================================================
+//  画像表示
+// ============================================================
+function showImage(index) {
+  imgCurrent.src = `/api/image/${index}?t=${Date.now()}`;
+}
+function preloadNext() {
+  if (indices.length < 2) return;
+  imgNext.src = `/api/image/${indices[(cursor + 1) % indices.length]}`;
+}
+
+// ============================================================
+//  次の画像
+// ============================================================
+function nextImage() {
+  if (isTransiting || indices.length === 0) return;
+  isTransiting = true;
+  cursor = (cursor + 1) % indices.length;
+  slotNext.style.zIndex   = 3;
+  slotCurrent.style.zIndex = 2;
+  slotNext.style.opacity  = 1;
+  setTimeout(() => {
+    imgCurrent.src = imgNext.src;
+    slotNext.style.opacity  = 0;
+    slotNext.style.zIndex   = 1;
+    slotCurrent.style.zIndex = 2;
+    updateCounter();
+    preloadNext();
+    isTransiting = false;
+  }, 260);
+}
+
+function updateCounter() {
+  counter.textContent = `${cursor + 1} / ${indices.length}`;
+}
+
+// ============================================================
+//  スライドショー
+// ============================================================
+function toggleSlideshow() {
+  if (slideTimer) {
+    clearInterval(slideTimer); slideTimer = null;
+    btnSlide.classList.remove("active");
+    btnSlide.textContent = "▶ 自動";
+    toast("スライドショー停止");
+  } else {
+    const sec = parseFloat(document.getElementById("interval-input").value) || 1.3;
+    slideTimer = setInterval(nextImage, Math.max(300, sec * 1000));
+    btnSlide.classList.add("active");
+    btnSlide.textContent = "⏹ 停止";
+    toast("スライドショー開始");
+  }
+}
+
+// ============================================================
+//  再読込
+// ============================================================
+async function doRescan() {
+  if (slideTimer) { clearInterval(slideTimer); slideTimer = null; }
+  document.getElementById("loading").style.display = "flex";
+  document.getElementById("loading-text").textContent = "再スキャン中...";
+  const res  = await fetch("/api/rescan", {method: "POST"});
+  const data = await res.json();
+  indices = shuffle(Array.from({length: data.count}, (_, i) => i));
+  cursor  = 0;
+  document.getElementById("loading").style.display = "none";
+  if (data.count > 0) { showImage(indices[cursor]); preloadNext(); }
+  updateCounter();
+  toast(`${data.count}枚の画像を読み込みました`);
+}
+
+// ============================================================
+//  UI表示制御（長押し廃止 → ☰ボタンで切り替え）
+// ============================================================
+function toggleUI() {
+  uiVisible ? hideUI() : showUI();
+}
+
+function showUI() {
+  uiVisible = true;
+  ui.classList.add("visible");
+  menuToggle.classList.add("menu-open");
+  menuToggle.textContent = "✕";
+  clearTimeout(uiTimer);
+  // 6秒後に自動非表示
+  uiTimer = setTimeout(hideUI, 6000);
+}
+
+function hideUI() {
+  uiVisible = false;
+  ui.classList.remove("visible");
+  menuToggle.classList.remove("menu-open");
+  menuToggle.textContent = "☰";
+}
+
+// ============================================================
+//  ビュアータップ → 次の画像（UI・モーダル以外）
+// ============================================================
+document.getElementById("viewer").addEventListener("click", e => {
+  if (e.target.closest("#ui") || e.target.closest("#menu-toggle")) return;
+  if (uiVisible) { hideUI(); return; }
+  nextImage();
+});
+
+// コンテキストメニュー抑制（Androidでの長押し対策）
+document.addEventListener("contextmenu", e => e.preventDefault());
+
+// ============================================================
+//  スワイプ → 次の画像
+// ============================================================
+let tx = 0, ty = 0;
+document.addEventListener("touchstart", e => {
+  tx = e.touches[0].clientX; ty = e.touches[0].clientY;
+}, {passive: true});
+document.addEventListener("touchend", e => {
+  if (e.target.closest("#modal-overlay") || e.target.closest("#ui") || e.target.closest("#menu-toggle")) return;
+  const dx = e.changedTouches[0].clientX - tx;
+  const dy = e.changedTouches[0].clientY - ty;
+  if (Math.abs(dx) > 30 && Math.abs(dx) > Math.abs(dy) * 2) {
+    if (uiVisible) { hideUI(); return; }
+    nextImage();
+  }
+}, {passive: true});
+
+// ============================================================
+//  トースト
+// ============================================================
+let toastTimer = null;
+function toast(msg, duration = 2200) {
+  const el = document.getElementById("toast");
+  el.textContent = msg; el.style.opacity = 1;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.style.opacity = 0; }, duration);
+}
+
+// ============================================================
+//  フォルダ設定モーダル
+// ============================================================
+let selectedFolders = new Set();
+
+async function openModal() {
+  hideUI();
+
+  const [foldersRes, specialsRes] = await Promise.all([
+    fetch("/api/folders"),
+    fetch("/api/special-folders")
+  ]);
+  const foldersData  = await foldersRes.json();
+  const specialsData = await specialsRes.json();
+
+  selectedFolders = new Set(foldersData.folders);
+  renderSelectedList();
+
+  const browser = document.getElementById("pane-browser");
+  browser.innerHTML = "";
+
+  // ── ショートカット（ピクチャ・ダウンロード）をツリーノードとして表示 ──
+  if (specialsData.specials && specialsData.specials.length > 0) {
+    const title = document.createElement("div");
+    title.className = "browser-section-title";
+    title.textContent = "よく使うフォルダ";
+    browser.appendChild(title);
+
+    specialsData.specials.forEach(sp => {
+      browser.appendChild(buildNode(sp));
+    });
+
+    const div = document.createElement("div");
+    div.className = "divider";
+    browser.appendChild(div);
+
+    const title2 = document.createElement("div");
+    title2.className = "browser-section-title";
+    title2.textContent = "すべてのドライブ";
+    browser.appendChild(title2);
+  }
+
+  // ── ドライブツリー ──
+  browser.insertAdjacentHTML("beforeend", '<div class="tree-loading">読み込み中...</div>');
+  const root = await fetchEntries("");
+  browser.querySelector(".tree-loading")?.remove();
+  root.forEach(entry => browser.appendChild(buildNode(entry)));
+
+  document.getElementById("modal-overlay").classList.add("open");
+}
+
+function closeModal() {
+  document.getElementById("modal-overlay").classList.remove("open");
+}
+document.getElementById("modal-overlay").addEventListener("click", e => {
+  if (e.target === document.getElementById("modal-overlay")) closeModal();
+});
+
+// ============================================================
+//  ショートカット行
+// ============================================================
+function buildShortcutRow(sp) {
+  const row = document.createElement("div");
+  row.className = "shortcut-row" + (selectedFolders.has(sp.path) ? " checked" : "");
+  row.dataset.path = sp.path;
+
+  const check = document.createElement("div");
+  check.className = "shortcut-check" + (selectedFolders.has(sp.path) ? " checked" : "");
+
+  const labelWrap = document.createElement("div");
+  labelWrap.style.flex = "1";
+  labelWrap.style.minWidth = "0";
+
+  const label = document.createElement("div");
+  label.className = "shortcut-label";
+  label.textContent = sp.name;
+
+  const pathEl = document.createElement("div");
+  pathEl.className = "shortcut-path";
+  pathEl.textContent = sp.path;
+
+  labelWrap.appendChild(label);
+  labelWrap.appendChild(pathEl);
+  row.appendChild(check);
+  row.appendChild(labelWrap);
+
+  row.addEventListener("click", () => {
+    if (selectedFolders.has(sp.path)) {
+      selectedFolders.delete(sp.path);
+      check.classList.remove("checked");
+      row.classList.remove("checked");
+    } else {
+      selectedFolders.add(sp.path);
+      check.classList.add("checked");
+      row.classList.add("checked");
+    }
+    renderSelectedList();
+  });
+
+  return row;
+}
+
+// ============================================================
+//  フォルダブラウザ（ツリー）
+// ============================================================
+async function fetchEntries(path) {
+  const url = path ? `/api/browse?path=${encodeURIComponent(path)}` : "/api/browse";
+  const res  = await fetch(url);
+  return (await res.json()).entries || [];
+}
+
+function buildNode(entry) {
+  const node = document.createElement("div");
+  node.className = "tree-node";
+  node.dataset.path = entry.path;
+
+  const row = document.createElement("div");
+  row.className = "tree-row" + (selectedFolders.has(entry.path) ? " checked" : "");
+
+  const toggle = document.createElement("div");
+  toggle.className = "tree-toggle" + (entry.hasChildren ? "" : " leaf");
+  toggle.textContent = "▶";
+
+  const check = document.createElement("div");
+  check.className = "tree-check" + (selectedFolders.has(entry.path) ? " checked" : "");
+
+  const icon = document.createElement("div");
+  icon.className = "tree-icon";
+  icon.textContent = "📁";
+
+  const name = document.createElement("div");
+  name.className = "tree-name";
+  name.textContent = entry.name;
+
+  row.appendChild(toggle);
+  row.appendChild(check);
+  row.appendChild(icon);
+  row.appendChild(name);
+  node.appendChild(row);
+
+  const children = document.createElement("div");
+  children.className = "tree-children";
+  node.appendChild(children);
+
+  let loaded = false;
+
+  if (entry.hasChildren) {
+    toggle.addEventListener("click", async e => {
+      e.stopPropagation();
+      const isOpen = children.classList.contains("open");
+      if (!isOpen) {
+        toggle.classList.add("open");
+        children.classList.add("open");
+        if (!loaded) {
+          loaded = true;
+          children.innerHTML = '<div class="tree-loading">読み込み中...</div>';
+          const entries = await fetchEntries(entry.path);
+          children.innerHTML = "";
+          entries.forEach(e2 => children.appendChild(buildNode(e2)));
+        }
+      } else {
+        toggle.classList.remove("open");
+        children.classList.remove("open");
+      }
+    });
+  }
+
+  row.addEventListener("click", e => {
+    if (e.target === toggle) return;
+    const path = entry.path;
+    if (selectedFolders.has(path)) {
+      selectedFolders.delete(path);
+      check.classList.remove("checked");
+      row.classList.remove("checked");
+    } else {
+      selectedFolders.add(path);
+      check.classList.add("checked");
+      row.classList.add("checked");
+    }
+    renderSelectedList();
+  });
+
+  return node;
+}
+
+// ============================================================
+//  選択済みリスト
+// ============================================================
+function renderSelectedList() {
+  const list = document.getElementById("selected-list");
+  list.innerHTML = "";
+  if (selectedFolders.size === 0) {
+    list.innerHTML = '<div style="font-size:12px;color:rgba(255,255,255,.35);padding:4px">未選択</div>';
+    return;
+  }
+  selectedFolders.forEach(path => {
+    const item = document.createElement("div");
+    item.className = "selected-item";
+
+    const p = document.createElement("div");
+    p.className = "selected-item-path";
+    p.textContent = path;
+
+    const del = document.createElement("button");
+    del.className = "selected-item-del";
+    del.textContent = "×";
+    del.onclick = () => {
+      selectedFolders.delete(path);
+      // ツリー・ショートカット両方のチェックを外す
+      document.querySelectorAll(`[data-path="${CSS.escape(path)}"]`).forEach(node => {
+        node.querySelector(".tree-row")?.classList.remove("checked");
+        node.querySelector(".tree-check")?.classList.remove("checked");
+        node.querySelector(".shortcut-row")?.classList.remove("checked");
+        node.querySelector(".shortcut-check")?.classList.remove("checked");
+        if (node.classList.contains("shortcut-row")) {
+          node.classList.remove("checked");
+          node.querySelector(".shortcut-check")?.classList.remove("checked");
+        }
+        if (node.classList.contains("tree-node")) {
+          node.querySelector(".tree-row")?.classList.remove("checked");
+          node.querySelector(".tree-check")?.classList.remove("checked");
+        }
+      });
+      renderSelectedList();
+    };
+
+    item.appendChild(p);
+    item.appendChild(del);
+    list.appendChild(item);
+  });
+}
+
+// ============================================================
+//  適用
+// ============================================================
+async function applyFolders() {
+  const btn = document.getElementById("btn-modal-apply");
+  btn.disabled = true;
+  btn.textContent = "スキャン中...";
+
+  const res  = await fetch("/api/folders", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({folders: [...selectedFolders]})
+  });
+  const data = await res.json();
+
+  indices = shuffle(Array.from({length: data.count}, (_, i) => i));
+  cursor  = 0;
+  if (data.count > 0) { showImage(indices[cursor]); preloadNext(); }
+  updateCounter();
+
+  btn.disabled = false;
+  btn.textContent = "適用 & 再読込";
+  closeModal();
+  toast(`${data.count}枚の画像を読み込みました`);
+}
+
+// ============================================================
+//  スタート
+// ============================================================
+init();
+</script>
+</body>
+</html>

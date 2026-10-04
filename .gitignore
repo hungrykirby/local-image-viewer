@@ -1,0 +1,13 @@
+# PC固有の画像フォルダ設定
+/folders.json
+
+# Pythonの一時ファイル・仮想環境
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ローカルの環境変数・秘密情報（サンプルは管理対象）
+.env
+.env.*
+!.env.example
