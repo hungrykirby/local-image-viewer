@@ -311,6 +311,7 @@ body {
 
   <button class="btn" onclick="openModal()">📁 フォルダ</button>
   <button class="btn" onclick="doRescan()">↺ 再読込</button>
+  <button class="btn" onclick="deleteCurrent()">🗑 削除</button>
   <div id="counter">-</div>
 </div>
 
@@ -369,14 +370,11 @@ async function init() {
     const res  = await fetch("/api/images");
     const data = await res.json();
     document.getElementById("loading").style.display = "none";
-    if (data.count === 0) {
+    if (data.indices.length === 0) {
       toast("フォルダを設定してください（☰ → 📁 フォルダ）", 5000);
       return;
     }
-    indices = shuffle(Array.from({length: data.count}, (_, i) => i));
-    showImage(indices[cursor]);
-    preloadNext();
-    updateCounter();
+    resetIndices(data);
   } catch (e) {
     document.getElementById("loading-text").textContent =
       "サーバーに接続できません。server.py が起動しているか確認してください。";
@@ -393,6 +391,14 @@ function shuffle(arr) {
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a;
+}
+
+// サーバーが返した表示可能なインデックス（削除済みを除く）で並び順を作り直す
+function resetIndices(data) {
+  indices = shuffle(data.indices);
+  cursor  = 0;
+  if (indices.length > 0) { showImage(indices[cursor]); preloadNext(); }
+  updateCounter();
 }
 
 // ============================================================
@@ -428,7 +434,7 @@ function nextImage() {
 }
 
 function updateCounter() {
-  counter.textContent = `${cursor + 1} / ${indices.length}`;
+  counter.textContent = `${indices.length ? cursor + 1 : 0} / ${indices.length}`;
 }
 
 // ============================================================
@@ -458,12 +464,33 @@ async function doRescan() {
   document.getElementById("loading-text").textContent = "再スキャン中...";
   const res  = await fetch("/api/rescan", {method: "POST"});
   const data = await res.json();
-  indices = shuffle(Array.from({length: data.count}, (_, i) => i));
-  cursor  = 0;
   document.getElementById("loading").style.display = "none";
-  if (data.count > 0) { showImage(indices[cursor]); preloadNext(); }
+  resetIndices(data);
+  toast(`${indices.length}枚の画像を読み込みました`);
+}
+
+// ============================================================
+//  削除（サーバー側のゴミ箱フォルダへ移動）
+// ============================================================
+async function deleteCurrent() {
+  if (isTransiting || indices.length === 0) return;
+  const index = indices[cursor];
+  if (!confirm("この画像を削除しますか？（ゴミ箱フォルダへ移動します）")) return;
+  const res = await fetch(`/api/image/${index}/delete`, {method: "POST"});
+  if (!res.ok) { toast("削除できませんでした"); return; }
+
+  indices.splice(cursor, 1);
+  if (indices.length === 0) {
+    imgCurrent.removeAttribute("src");
+    imgNext.removeAttribute("src");
+    cursor = 0;
+  } else {
+    cursor %= indices.length;
+    showImage(indices[cursor]);
+    preloadNext();
+  }
   updateCounter();
-  toast(`${data.count}枚の画像を読み込みました`);
+  toast("ゴミ箱へ移動しました");
 }
 
 // ============================================================
@@ -776,16 +803,12 @@ async function applyFolders() {
     body: JSON.stringify({folders: [...selectedFolders]})
   });
   const data = await res.json();
-
-  indices = shuffle(Array.from({length: data.count}, (_, i) => i));
-  cursor  = 0;
-  if (data.count > 0) { showImage(indices[cursor]); preloadNext(); }
-  updateCounter();
+  resetIndices(data);
 
   btn.disabled = false;
   btn.textContent = "適用 & 再読込";
   closeModal();
-  toast(`${data.count}枚の画像を読み込みました`);
+  toast(`${indices.length}枚の画像を読み込みました`);
 }
 
 // ============================================================

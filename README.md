@@ -13,13 +13,15 @@ PC内の画像を、同じローカルネットワーク上のiPad・Android端�
 - 表示間隔を変更できる自動スライドショー（初期値は1.3秒）
 - 選択したフォルダを保存し、次回起動時に読み込み
 - 「再読込」ボタンで画像の追加・削除を反映
+- 表示中の画像を「削除」ボタンでゴミ箱フォルダへ移動
+- Androidアプリ「Nightdrop」から画像を無線で受信（後述）
 
 対象の拡張子は `.jpg`、`.jpeg`、`.png`、`.gif`、`.webp`、`.bmp`、`.avif` です。実際に表示できる形式は、閲覧するブラウザの対応状況にも依存します。
 
 ## 必要な環境
 
 - サーバー用のPC：Python 3（`pip` と `venv` が利用できる環境）
-- Pythonライブラリ：Flask
+- Pythonライブラリ：Flask、waitress（`requirements.txt`。waitress が無い場合は Flask の開発用サーバーで動作）
 - 閲覧用のブラウザ
 - 別端末で閲覧する場合：PCと閲覧端末が通信できるローカルネットワーク
 
@@ -29,11 +31,11 @@ PC内の画像を、同じローカルネットワーク上のiPad・Android端�
 
 リポジトリをダウンロードまたはクローンし、`server.py` があるフォルダでPowerShellを開きます。
 
-初回は仮想環境を作成し、Flaskをインストールします。
+初回は仮想環境を作成し、必要なライブラリをインストールします。
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install Flask
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
 サーバーを起動します。
@@ -66,14 +68,118 @@ Windowsファイアウォールで許可が必要な場合は、信頼できる�
 
 フォルダの参照先は、サーバーを起動しているPCです。画像の追加・削除後は「↺ 再読込」を押してください。
 
+## Nightdropからの画像受信
+
+Androidアプリ「Nightdrop」から送られた画像を、送信の単位（バッチ）ごとのフォルダに保存します。
+
+### 設定
+
+`.env.example` を `.env` にコピーし、`VIEWER_UPLOAD_TOKEN` に Nightdrop と共有するトークンを設定してサーバーを再起動します。未設定の場合、受信は無効です。
+
+```powershell
+.\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+| 設定 | 初期値 | 内容 |
+| --- | --- | --- |
+| `VIEWER_UPLOAD_TOKEN` | なし | 共有トークン |
+| `VIEWER_LIBRARY_DIR` | `library` | 受信画像の保存先 |
+| `VIEWER_DATA_DIR` | `data` | 重複判定DB（`nightdrop.db`）と受信ログ（`upload.log`）の保存先 |
+| `VIEWER_MAX_UPLOAD_MB` | `50` | 1枚あたりの上限サイズ |
+| `VIEWER_HOST` / `VIEWER_PORT` | `0.0.0.0` / `5000` | 待ち受けアドレスとポート |
+
+相対パスは `server.py` のあるフォルダが基準です。環境変数で指定した値は `.env` より優先されます。
+
+### 受信した画像の閲覧
+
+「📁 フォルダ」の「受信ライブラリ（Nightdrop）」を選ぶと、すべてのバッチが表示対象になります。「▶」で展開すると、バッチのフォルダを個別に選べます。
+
+閲覧対象のフォルダに届いた画像は、再起動なしで一覧に追加されます。ページの再読み込みか「↺ 再読込」で表示に反映されます。
+
+### 削除
+
+メニューの「🗑 削除」で、表示中の画像を `受信ライブラリ/.trash/日付/` へ移動します。完全には削除されないため、戻す場合はファイルを元のフォルダへ移してください。削除した画像が Nightdrop から再送されても保存しません。`.trash` のように `.` で始まるフォルダは表示対象外です。
+
+### API（Nightdrop向け）
+
+どちらも `Authorization: Bearer <トークン>` ヘッダーが必要です。
+
+| API | 内容 |
+| --- | --- |
+| `GET /api/health` | 接続確認。トークンが正しければ `200 {"status": "ok"}` |
+| `POST /api/upload` | `multipart/form-data` で1枚送信 |
+
+`POST /api/upload` の送信項目は次のとおりです。
+
+| 項目 | 必須 | 内容 |
+| --- | --- | --- |
+| `file` | 必須 | 画像ファイル |
+| `batch` | 必須 | バッチ名（例：`2026-10-03`）。英数字・日本語・`_`・`-` のみ、64文字以内 |
+| `sha256` | 必須 | ファイル内容のSHA-256（16進数64文字） |
+| `filename` | 任意 | 元のファイル名。省略時は `file` のファイル名 |
+| `modified_at` | 任意 | 元の更新日時（UNIXエポックのミリ秒） |
+
+返事はJSONの `status` で区別します。
+
+| `status` | HTTP | 意味 | アプリ側の扱い |
+| --- | --- | --- | --- |
+| `saved` | 201 | 保存した | 送信済み |
+| `duplicate` | 200 | 同じ画像を受け取り済み | 送信済み |
+| `deleted` | 200 | ビュワーで削除済みのため保存しない | 送信済み |
+| `invalid` | 400 | バッチ名・ファイル名・ハッシュ値などが不正 | 再送 |
+| `unauthorized` | 401 | トークンが無い・違う | 再送 |
+| `too_large` | 413 | サイズ超過 | 再送 |
+| `corrupted` | 422 | ハッシュ値が一致しない・画像でない・通信が途中で切れた | 再送 |
+| `error` | 500 / 503 | サーバーエラー（503はトークン未設定） | 再送 |
+
+受信処理の仕様は次のとおりです。
+
+- 重複は SHA-256 で判定します。別のバッチ名で送られても二重に保存しません。
+- 同じ名前のファイルがある場合は `名前 (2).jpg` のように別名で保存します。
+- 受信中は `受信ライブラリ/.incoming/` に書き込み、検証後にバッチのフォルダへ移します。失敗したファイルはライブラリに残りません。
+- 受信結果は `data/upload.log` にタブ区切り（日時・結果・バッチ・ファイル名・ハッシュ値・送信元・詳細）で記録します。
+
+### 常駐させる
+
+画面を出さずに `server.py` を起動し続けるよう、OSのサービスとして登録します。
+
+Raspberry Pi などの Linux では systemd を使います（パスとユーザーは環境に合わせて変更）。
+
+```ini
+# /etc/systemd/system/local-image-viewer.service
+[Unit]
+Description=Local Image Viewer
+After=network-online.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/local-image-viewer
+ExecStart=/home/pi/local-image-viewer/.venv/bin/python server.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```sh
+sudo systemctl enable --now local-image-viewer
+```
+
+Windows では NSSM や Servy で、プログラムに `.venv\Scripts\python.exe`、引数に `server.py`、作業フォルダに `server.py` のあるフォルダを指定します。
+
 ## ファイル構成とローカル設定
 
 | ファイル | 内容 |
 | --- | --- |
-| `server.py` | Flaskサーバー、フォルダ検索、画像配信 |
+| `server.py` | Flaskサーバー、フォルダ検索、画像配信、APIのルーティング |
+| `receiver.py` | Nightdropからの受信（保存・重複判定・削除済み管理・ログ） |
+| `requirements.txt` | 必要なPythonライブラリ |
+| `.env.example` | 設定のサンプル。`.env` にコピーして使う |
 | `index.html` | ブラウザ画面、スライドショー、フォルダ選択 |
 | `.gitignore` | ローカル設定や一時ファイルのGit除外設定 |
 | `folders.json` | 選択した画像フォルダの保存先。設定時に自動生成され、Git管理から除外 |
+| `library/` | 受信した画像の保存先（初期値）。Git管理から除外 |
+| `data/` | 重複判定DBと受信ログ（初期値）。Git管理から除外 |
 
 `folders.json` にはPC固有の絶対パスが保存されます。公開リポジトリには追加しないでください。仮想環境、Pythonのキャッシュ、`.env` などもGit管理から除外しています。
 
@@ -81,9 +187,9 @@ Windowsファイアウォールで許可が必要な場合は、信頼できる�
 
 ## 利用するネットワークについて
 
-このアプリは、信頼できるローカルネットワークでの利用を想定しています。**認証機能はありません。インターネットへ公開しないでください。**
+このアプリは、信頼できるローカルネットワークでの利用を想定しています。**画像の受信API以外に認証機能はありません。インターネットへ公開しないでください。**
 
-サーバーはポート `5000` で、PCのすべてのネットワークインターフェースからの接続を待ち受けます。接続できる端末からは、PCのフォルダ一覧の閲覧、対象フォルダの変更、画像の取得が可能です。
+サーバーはポート `5000` で、PCのすべてのネットワークインターフェースからの接続を待ち受けます。接続できる端末からは、PCのフォルダ一覧の閲覧、対象フォルダの変更、画像の取得、画像のゴミ箱フォルダへの移動が可能です。
 
 プロジェクト全体の静的配信は無効にしています。`.git` や `folders.json` の直接配信は行いませんが、選択したフォルダのパスは画面表示用のAPIで返します。
 
@@ -93,6 +199,7 @@ Windowsファイアウォールで許可が必要な場合は、信頼できる�
 | --- | --- |
 | `python` が見つからない | Python 3のインストールとPATH設定を確認し、PowerShellを開き直してください。 |
 | `No module named flask` と表示される | 上記のFlaskインストールを実行し、`.venv` 内のPythonで起動してください。 |
+| Nightdropの接続確認が失敗する | `.env` の `VIEWER_UPLOAD_TOKEN` とアプリのトークンが一致しているか、サーバーを再起動したかを確認し、`data/upload.log` を見てください。 |
 | PCでは開けるが別端末では開けない | PCのIPv4アドレス、ファイアウォール、端末間の通信を制限するゲストWi-Fiなどの設定を確認してください。 |
 | 画像が表示されない | 選択フォルダ、対応拡張子、PCからファイルを読み取れるかを確認し、「再読込」を押してください。 |
 | 特定の形式だけ表示されない | 閲覧しているブラウザが、その画像形式に対応しているか確認してください。 |
