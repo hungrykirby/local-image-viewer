@@ -20,7 +20,7 @@
       "Bash(gh issue:*)",
       "Bash(python3:*)",
       "Bash(.venv/bin/python:*)",
-      "Bash(.venv/bin/pip:*)",
+      "Read(./.env.sample)",
       "Read",
       "Edit",
       "Write",
@@ -35,7 +35,6 @@
       "Bash(rm -rf:*)",
       "Bash(sudo:*)",
       "Read(./.env)",
-      "Read(./.env.*)",
       "Read(./secrets/**)",
       "Read(./**/*.pem)",
       "Read(./**/*.key)"
