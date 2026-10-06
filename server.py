@@ -37,7 +37,8 @@ def load_dotenv(path):
 
 
 def resolve_dir(value):
-    return os.path.abspath(os.path.join(APP_DIR, value))
+    """~ をホームフォルダに展開し、相対パスは server.py のあるフォルダ基準で解決する。"""
+    return os.path.abspath(os.path.join(APP_DIR, os.path.expanduser(value)))
 
 
 load_dotenv(os.path.join(APP_DIR, ".env"))
@@ -45,14 +46,15 @@ load_dotenv(os.path.join(APP_DIR, ".env"))
 HOST              = os.environ.get("VIEWER_HOST", "0.0.0.0")
 PORT              = int(os.environ.get("VIEWER_PORT", "5000"))
 UPLOAD_TOKEN      = os.environ.get("VIEWER_UPLOAD_TOKEN", "")
-LIBRARY_DIR       = resolve_dir(os.environ.get("VIEWER_LIBRARY_DIR", "library"))
+# Windows は C:\Users\<名前>\Pictures\Nightdrop、Raspberry Pi は /home/<ユーザー>/Pictures/Nightdrop
+LIBRARY_DIR       = resolve_dir(os.environ.get("VIEWER_LIBRARY_DIR", os.path.join("~", "Pictures", "Nightdrop")))
 DATA_DIR          = resolve_dir(os.environ.get("VIEWER_DATA_DIR", "data"))
 MAX_UPLOAD_BYTES  = int(os.environ.get("VIEWER_MAX_UPLOAD_MB", "50")) * 1024 * 1024
 FORM_OVERHEAD_BYTES = 64 * 1024  # バッチ名・ハッシュ値などファイル以外の送信内容の分
 
 FOLDERS_JSON = os.path.join(APP_DIR, "folders.json")
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".avif"}
-LIBRARY_LABEL = "受信ライブラリ（Nightdrop）"
+LIBRARY_LABEL = "受信フォルダ（Nightdrop）"
 
 # プロジェクト全体を公開せず、必要なファイルだけを明示的に配信する。
 app = Flask(__name__, static_folder=None)
@@ -227,7 +229,7 @@ def api_browse():
 
 @app.route("/api/special-folders")
 def api_special_folders():
-    """受信ライブラリと、Windowsの特殊フォルダ（ピクチャ・ダウンロードなど）を返す"""
+    """受信フォルダと、Windowsの特殊フォルダ（ピクチャ・ダウンロードなど）を返す"""
     specials = [{"name": LIBRARY_LABEL, "path": LIBRARY_DIR, "hasChildren": True}]
     if os.name == "nt":
         userprofile = os.environ.get("USERPROFILE", "")
@@ -329,7 +331,7 @@ if __name__ == "__main__":
     print("=" * 45)
     print("画像ビュアー サーバー v4 起動中...")
     print(f"画像枚数: {len(IMAGE_LIST)}")
-    print(f"受信ライブラリ: {LIBRARY_DIR}")
+    print(f"受信フォルダ: {LIBRARY_DIR}")
     if not UPLOAD_TOKEN:
         print("※VIEWER_UPLOAD_TOKEN が未設定のため、Nightdropからの受信は無効です")
     print("ブラウザで以下のURLを開いてください:")

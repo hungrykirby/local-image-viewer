@@ -12,6 +12,5 @@ venv/
 .env.*
 !.env.example
 
-# Nightdropから受信した画像・受信DB・ログ
-/library/
+# Nightdropの受信DB・ログ
 /data/

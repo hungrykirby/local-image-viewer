@@ -18,21 +18,21 @@ python -m venv .venv
 
 On macOS/Linux: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python server.py`. `server.py` uses waitress if importable, else Flask's dev server.
 
-Config comes from `.env` next to `server.py` (see `.env.example`; real env vars take precedence): `VIEWER_UPLOAD_TOKEN`, `VIEWER_LIBRARY_DIR`, `VIEWER_DATA_DIR`, `VIEWER_MAX_UPLOAD_MB`, `VIEWER_HOST`, `VIEWER_PORT`. The upload endpoints return 503 if the token is unset.
+Config comes from `.env` next to `server.py` (see `.env.example`; real env vars take precedence): `VIEWER_UPLOAD_TOKEN`, `VIEWER_LIBRARY_DIR`, `VIEWER_DATA_DIR`, `VIEWER_MAX_UPLOAD_MB`, `VIEWER_HOST`, `VIEWER_PORT`. The upload endpoints return 503 if the token is unset. The receive folder (`VIEWER_LIBRARY_DIR`, called `LIBRARY_DIR` / "library" in code) defaults to `~/Pictures/Nightdrop`, outside the repo; `~` is expanded and relative paths resolve against the `server.py` folder.
 
-For ad-hoc verification, copy `server.py`/`receiver.py`/`index.html` to a temp dir and use `server.app.test_client()` there, since the server writes `folders.json`, `library/`, `data/` next to itself.
+For ad-hoc verification, copy `server.py`/`receiver.py`/`index.html` to a temp dir, set `VIEWER_LIBRARY_DIR` to a temp path (otherwise it writes into the real `~/Pictures/Nightdrop`), and use `server.app.test_client()` there, since the server writes `folders.json` and `data/` next to itself. `../Nightdrop/tool/flask_integration_test.sh` runs the app's integration tests against a temp copy of this server.
 
 ## Architecture
 
 - **Index-based image addressing.** The server holds a global `IMAGE_LIST` (absolute paths, guarded by `IMAGE_LOCK`). The client never sees image paths: `/api/images`, `/api/rescan`, `POST /api/folders` return `{count, indices}`, the client shuffles `indices` (`resetIndices` in `index.html`) and fetches `/api/image/<index>`. Indices must stay stable between rescans, so: received images are *appended*, and deleted images are set to `None` (excluded from `indices`, 404 on fetch). A rescan rebuilds the list and invalidates all indices.
-- **Folder config** persists in `folders.json` (gitignored; machine-specific absolute paths). `scan_images` skips dot-directories, which is what hides `library/.incoming` and `library/.trash`.
-- **Folder picker** (`/api/browse`, `/api/special-folders`) browses the server's filesystem. Special folders always include the receive library; Pictures/Downloads only on Windows.
+- **Folder config** persists in `folders.json` (gitignored; machine-specific absolute paths). `scan_images` skips dot-directories, which is what hides `.incoming` and `.trash` inside the receive folder.
+- **Folder picker** (`/api/browse`, `/api/special-folders`) browses the server's filesystem. Special folders always include the receive folder; Pictures/Downloads only on Windows.
 - **Nightdrop receiving** (`receiver.py`, routes `/api/health`, `/api/upload` in `server.py`):
   - Auth: `Authorization: Bearer <VIEWER_UPLOAD_TOKEN>`, compared with `hmac.compare_digest`.
   - Response contract is the `status` field, mapped to HTTP codes by `STATUS_HTTP`. `saved` / `duplicate` / `deleted` mean the app marks the image as sent; anything else means the app retries. Don't change these names without coordinating with the app.
-  - Write path: stream to `library/.incoming/*.part` while hashing → verify size, SHA-256, magic bytes → under a lock, reserve a unique name with `O_EXCL` (`name (2).ext` on collision) → `os.replace` → `os.utime` from `modified_at` (epoch ms) → insert into SQLite. Leftover `.part` files are removed on startup.
-  - Dedup/tombstones: `data/nightdrop.db` table `images(sha256 PK, state stored|deleted, ...)`. Dedup is by hash only, regardless of batch. Images already in the library that were not received through the API are not in the DB.
-  - Viewer delete (`POST /api/image/<index>/delete`) moves the file to `library/.trash/YYYY-MM-DD/` and upserts `state=deleted`, so a re-send returns `deleted`. This works for any viewed image, not only received ones.
+  - Write path: stream to `<receive folder>/.incoming/*.part` while hashing → verify size, SHA-256, magic bytes → under a lock, reserve a unique name with `O_EXCL` (`name (2).ext` on collision) → `os.replace` → `os.utime` from `modified_at` (epoch ms) → insert into SQLite. Leftover `.part` files are removed on startup.
+  - Dedup/tombstones: `data/nightdrop.db` table `images(sha256 PK, state stored|deleted, ...)`. Dedup is by hash only, regardless of batch. Images already in the receive folder that were not received through the API are not in the DB.
+  - Viewer delete (`POST /api/image/<index>/delete`) moves the file to `<receive folder>/.trash/YYYY-MM-DD/` and upserts `state=deleted`, so a re-send returns `deleted`. This works for any viewed image, not only received ones.
   - Log: `data/upload.log`, tab-separated (time, status, batch, filename, sha256, remote, detail).
 - **Frontend** is a single self-contained `index.html` (inline CSS + vanilla JS, no CDN/framework). Two stacked slots (`slot-current` / `slot-next`) crossfade; the next image is preloaded into `img-next`.
 
