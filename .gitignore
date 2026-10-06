@@ -11,3 +11,6 @@ venv/
 .env
 .env.*
 !.env.example
+
+# Nightdropの受信DB・ログ
+/data/
