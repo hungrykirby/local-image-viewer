@@ -25,7 +25,7 @@ PC内の画像を、同じローカルネットワーク上のiPad・Android端�
 - 閲覧用のブラウザ
 - 別端末で閲覧する場合：PCと閲覧端末が通信できるローカルネットワーク
 
-以下はWindows / PowerShell向けの手順です。フォルダ選択には、Windowsのドライブ一覧と「ピクチャ」「ダウンロード」へのショートカットがあります。
+以下はWindows / PowerShell向けの手順です。フォルダ選択には、Windowsのドライブ一覧と「ピクチャ」「ダウンロード」へのショートカットがあります。Raspberry Piで動かす場合は「[Raspberry Piで動かす](#raspberry-piで動かす)」を参照してください。
 
 ## 起動方法
 
@@ -145,18 +145,92 @@ Androidアプリ「Nightdrop」から送られた画像を、送信の単位（�
 
 画面を出さずに `server.py` を起動し続けるよう、OSのサービスとして登録します。
 
-Raspberry Pi などの Linux では systemd を使います（パスとユーザーは環境に合わせて変更）。
+Windows では NSSM や Servy で、プログラムに `.venv\Scripts\python.exe`、引数に `server.py`、作業フォルダに `server.py` のあるフォルダを指定します。
+
+Raspberry Pi などの Linux では systemd を使います。手順は「[常駐させる（systemd）](#常駐させるsystemd)」を参照してください。
+
+## Raspberry Piで動かす
+
+Raspberry Pi OS で、USBドライブ上の画像を表示し、Nightdropから受け取った画像も同じUSBドライブに保存する手順です。例では、USBドライブ（FAT32）を `/mnt/usb` にマウントし、受信フォルダを `/mnt/usb/ai/NightDrop` にします。パスとユーザー名は環境に合わせて読み替えてください。
+
+### USBドライブをマウントする
+
+`lsblk -f` で、USBドライブ（`sda1` など）の `FSTYPE` と `UUID` を確認します。`mmcblk0` はSDカードなので触らないでください。データが入っているドライブはフォーマットしないでください。
+
+起動時に自動でマウントされるよう、`/etc/fstab` に追記します。
+
+```sh
+sudo mkdir -p /mnt/usb
+sudo cp /etc/fstab /etc/fstab.bak
+sudo nano /etc/fstab
+```
+
+FAT32の場合の例です。`UUID` は `lsblk -f` の値、`uid` と `gid` は `id -u` と `id -g` の値に置き換えます。
+
+```
+UUID=XXXX-XXXX  /mnt/usb  vfat  defaults,nofail,x-systemd.device-timeout=10s,uid=1000,gid=1000,umask=022,utf8,time_offset=540  0  0
+```
+
+| オプション | 内容 |
+| --- | --- |
+| `nofail`、`x-systemd.device-timeout=10s` | USBドライブが無くても、Raspberry Piの起動を止めない |
+| `uid`、`gid`、`umask=022` | FAT32はファイルの所有者を持たないため、サーバーを動かすユーザーの持ち物として扱う。受信した画像の保存と、ゴミ箱への移動に必要 |
+| `utf8` | 日本語のファイル名を扱う |
+| `time_offset=540` | 更新日時を日本時間として扱い、WindowsやMacで見たときに9時間ずれないようにする |
+
+```sh
+sudo systemctl daemon-reload
+sudo mount -a
+findmnt /mnt/usb
+```
+
+USBドライブを抜くときは、サーバーを止めて `sudo umount /mnt/usb` を実行してから抜いてください。FAT32は更新日時を2秒単位で記録するため、受信した画像の更新日時は最大1秒ずれます。
+
+### セットアップと起動
+
+```sh
+sudo apt install -y git python3-venv
+git clone https://github.com/hungrykirby/local-image-viewer.git
+cd local-image-viewer
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+cp .env.example .env
+```
+
+Raspberry Pi OS では、`pip` でシステム全体にライブラリを入れることが禁止されているため、仮想環境（`.venv`）を使います。
+
+`.env` で、トークンと受信フォルダを設定します。トークンは `.venv/bin/python -c "import secrets; print(secrets.token_urlsafe(32))"` で生成できます。
+
+```
+VIEWER_UPLOAD_TOKEN=<生成したトークン>
+VIEWER_LIBRARY_DIR=/mnt/usb/ai/NightDrop
+```
+
+受信フォルダをUSBドライブに置くと、SDカードの容量を使わずに済み、削除した画像も同じドライブ内の `.trash` へ移すだけで済みます。重複判定DBと受信ログ（`data/`）は小さいため、SDカード上のままで構いません。
+
+```sh
+.venv/bin/python server.py
+```
+
+閲覧端末からは `http://<Raspberry PiのIPアドレス>:5000` を開きます。IPアドレスは `hostname -I` で確認できます。フォルダ選択の一覧は `/` から始まるため、`mnt` → `usb` と展開して画像フォルダを選びます。
+
+### 常駐させる（systemd）
+
+`/etc/systemd/system/local-image-viewer.service` を作成します。`<ユーザー>` と `server.py` のあるフォルダは環境に合わせて変更してください。
 
 ```ini
-# /etc/systemd/system/local-image-viewer.service
 [Unit]
 Description=Local Image Viewer
 After=network-online.target
+Wants=network-online.target
+# USBドライブのマウント後に起動する。マウントできなければ起動しない
+RequiresMountsFor=/mnt/usb
 
 [Service]
-User=pi
-WorkingDirectory=/home/pi/local-image-viewer
-ExecStart=/home/pi/local-image-viewer/.venv/bin/python server.py
+User=<ユーザー>
+WorkingDirectory=/home/<ユーザー>/local-image-viewer
+ExecStart=/home/<ユーザー>/local-image-viewer/.venv/bin/python server.py
+Environment=PYTHONUNBUFFERED=1
 Restart=on-failure
 
 [Install]
@@ -164,10 +238,14 @@ WantedBy=multi-user.target
 ```
 
 ```sh
+sudo systemctl daemon-reload
 sudo systemctl enable --now local-image-viewer
+journalctl -u local-image-viewer -f   # ログを見る
 ```
 
-Windows では NSSM や Servy で、プログラムに `.venv\Scripts\python.exe`、引数に `server.py`、作業フォルダに `server.py` のあるフォルダを指定します。
+- `RequiresMountsFor` が無いと、USBドライブのマウント前にサーバーが起動し、画像が0枚になることがあります。
+- Raspberry Pi OS（Bookworm以降）には既定の `pi` ユーザーが無いため、`User` には自分のユーザー名を指定します。
+- `PYTHONUNBUFFERED=1` は、起動時のメッセージをすぐに `journalctl` へ出すための指定です。
 
 ## ファイル構成とローカル設定
 
@@ -200,6 +278,7 @@ Windows では NSSM や Servy で、プログラムに `.venv\Scripts\python.exe
 | --- | --- |
 | `python` が見つからない | Python 3のインストールとPATH設定を確認し、PowerShellを開き直してください。 |
 | `No module named flask` と表示される | 上記のFlaskインストールを実行し、`.venv` 内のPythonで起動してください。 |
+| Raspberry Piの再起動後に画像が0枚になる | `findmnt /mnt/usb` でUSBドライブがマウントされているか、サービスに `RequiresMountsFor=/mnt/usb` を書いたかを確認してください。 |
 | Nightdropの接続確認が失敗する | `.env` の `VIEWER_UPLOAD_TOKEN` とアプリのトークンが一致しているか、サーバーを再起動したかを確認し、`data/upload.log` を見てください。 |
 | PCでは開けるが別端末では開けない | PCのIPv4アドレス、ファイアウォール、端末間の通信を制限するゲストWi-Fiなどの設定を確認してください。 |
 | 画像が表示されない | 選択フォルダ、対応拡張子、PCからファイルを読み取れるかを確認し、「再読込」を押してください。 |
