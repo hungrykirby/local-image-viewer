@@ -12,6 +12,8 @@
 body {
   background: #000;
   width: 100vw; height: 100vh;
+  /* スマホでアドレスバーの分だけ画像の下端が隠れないように（未対応ブラウザは上の 100vh） */
+  height: 100dvh;
   overflow: hidden;
   font-family: -apple-system, BlinkMacSystemFont, sans-serif;
   color: #fff;
@@ -79,6 +81,7 @@ body {
   background: linear-gradient(to bottom, rgba(0,0,0,.7) 0%, transparent 100%);
   padding: 14px 68px 28px 16px; /* 右側にmenu-toggleの幅分余白 */
   display: flex; align-items: center; gap: 10px;
+  flex-wrap: wrap; /* 横幅が足りない画面（スマホ）では折り返して全ボタンを表示する */
   opacity: 0; transition: opacity .3s ease;
   pointer-events: none;
 }
@@ -286,6 +289,35 @@ body {
   padding: 6px 6px 6px 48px;
   font-size: 12px; color: rgba(255,255,255,.4);
 }
+
+/* ============================================================
+   スマホなど狭い画面
+============================================================ */
+@media (max-width: 600px) {
+  /* 折り返して2〜3段になるので、下の段の文字も読めるよう背景を濃いめにする */
+  #ui {
+    padding: 12px 64px 24px 12px;
+    gap: 8px;
+    background: linear-gradient(to bottom, rgba(0,0,0,.8) 0%, rgba(0,0,0,.55) 70%, transparent 100%);
+  }
+  .btn { font-size: 13px; padding: 7px 10px; }
+  /* iOS は文字サイズ 16px 未満の入力欄にフォーカスすると画面を拡大するため */
+  #interval-input { font-size: 16px; }
+
+  #toast {
+    white-space: normal; text-align: center;
+    width: max-content; max-width: calc(100vw - 32px);
+  }
+
+  #modal-overlay { padding: 10px; }
+  #modal { max-height: 92vh; max-height: 92dvh; }
+  #modal-header { padding: 14px 14px 12px; gap: 8px; }
+  #modal-header h2 { font-size: 15px; }
+  /* フォルダブラウザと選択中リストを横並びから縦積みにする */
+  #modal-body { flex-direction: column; }
+  #pane-browser { border-right: none; border-bottom: 1px solid rgba(255,255,255,.1); }
+  #pane-selected { width: auto; flex-shrink: 0; max-height: 30vh; max-height: 30dvh; }
+}
 </style>
 </head>
 <body>
@@ -349,7 +381,6 @@ body {
 let indices      = [];
 let cursor       = 0;
 let slideTimer   = null;
-let uiTimer      = null;
 let isTransiting = false;
 let uiVisible    = false;
 
@@ -495,6 +526,8 @@ async function deleteCurrent() {
 
 // ============================================================
 //  UI表示制御（長押し廃止 → ☰ボタンで切り替え）
+//  自動では閉じない（秒数入力中に消えないように）。
+//  閉じるのは ✕ ボタン、画像タップ、スワイプのとき。
 // ============================================================
 function toggleUI() {
   uiVisible ? hideUI() : showUI();
@@ -505,9 +538,6 @@ function showUI() {
   ui.classList.add("visible");
   menuToggle.classList.add("menu-open");
   menuToggle.textContent = "✕";
-  clearTimeout(uiTimer);
-  // 6秒後に自動非表示
-  uiTimer = setTimeout(hideUI, 6000);
 }
 
 function hideUI() {
